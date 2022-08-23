@@ -297,6 +297,7 @@ pub(crate) fn prepare_strs<'a>(
     been_split: &'a [Utf8Chunked],
     hb: &RandomState,
 ) -> Vec<Vec<StrHash<'a>>> {
+    println!("Computing Hashes for the Series Joining On")
     POOL.install(|| {
         been_split
             .par_iter()

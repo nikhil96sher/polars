@@ -24,7 +24,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "asof_join")]
 pub(crate) use single_keys::create_probe_table;
-use single_keys::*;
+pub use single_keys::*;
 #[cfg(feature = "asof_join")]
 pub(crate) use single_keys_dispatch::prepare_strs;
 use single_keys_inner::*;
