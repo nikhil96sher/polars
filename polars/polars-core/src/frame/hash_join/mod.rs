@@ -336,7 +336,7 @@ impl DataFrame {
         slice: Option<(i64, usize)>,
         _check_rechunk: bool,
         _verbose: bool,
-        hash_table_information: Option<HashTableInformation>,
+        hash_table_information: Option<&HashTableInformation>,
     ) -> Result<DataFrame> {
         #[cfg(feature = "cross_join")]
         if let JoinType::Cross = how {
@@ -609,7 +609,7 @@ impl DataFrame {
         right_on: I,
         how: JoinType,
         suffix: Option<String>,
-        hash_table_information: Option<HashTableInformation>
+        hash_table_information: Option<&HashTableInformation>
     ) -> Result<DataFrame>
     where
         I: IntoIterator<Item = S>,
@@ -659,7 +659,7 @@ impl DataFrame {
         s_right: &Series,
         suffix: Option<String>,
         slice: Option<(i64, usize)>,
-        hash_table_information: Option<HashTableInformation>,
+        hash_table_information: Option<&HashTableInformation>,
     ) -> Result<DataFrame> {
         #[cfg(feature = "dtype-categorical")]
         check_categorical_src(s_left.dtype(), s_right.dtype())?;

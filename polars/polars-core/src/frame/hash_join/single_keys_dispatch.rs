@@ -54,7 +54,7 @@ impl Series {
         }
     }
 
-    pub(super) fn hash_join_inner(&self, other: &Series, hash_table: Option<HashTableInformation>) -> (Vec<IdxSize>, Vec<IdxSize>) {
+    pub(super) fn hash_join_inner(&self, other: &Series, hash_table: Option<&HashTableInformation>) -> (Vec<IdxSize>, Vec<IdxSize>) {
         let (lhs, rhs) = (self.to_physical_repr(), other.to_physical_repr());
 
         use DataType::*;
@@ -68,11 +68,11 @@ impl Series {
                 if self.bit_repr_is_large() {
                     let lhs = self.bit_repr_large();
                     let rhs = other.bit_repr_large();
-                    num_group_join_inner(&lhs, &rhs)
+                    num_group_join_inner(&lhs, &rhs, hash_table)
                 } else {
                     let lhs = self.bit_repr_small();
                     let rhs = other.bit_repr_small();
-                    num_group_join_inner(&lhs, &rhs)
+                    num_group_join_inner(&lhs, &rhs, hash_table)
                 }
             }
         }
@@ -136,12 +136,14 @@ where
 fn num_group_join_inner<T>(
     left: &ChunkedArray<T>,
     right: &ChunkedArray<T>,
+    hash_table: &HashTableInformation,
 ) -> (Vec<IdxSize>, Vec<IdxSize>)
 where
     T: PolarsIntegerType,
     T::Native: Hash + Eq + Send + AsU64 + Copy,
     Option<T::Native>: AsU64,
 {
+
     let n_threads = POOL.current_num_threads();
     let (a, b, swap) = det_hash_prone_order!(left, right);
     let splitted_a = split_ca(a, n_threads).unwrap();
@@ -316,10 +318,18 @@ pub(crate) fn prepare_strs<'a>(
 
 pub fn get_splitted_chunked_array(other: &DataFrame, on: Vec<String>) -> Vec<ChunkedArray<Utf8Type>> {
     if on.len() == 1 {
+        println!("RUNNING SPLITTED CHUNKED ARRAY");
         let rhs = other.column(&on[0]).unwrap();
-        let chunked_rhs = rhs.utf8().unwrap();
         let n_threads: usize = POOL.current_num_threads();
-        split_ca(chunked_rhs, n_threads).unwrap()
+        match rhs.dtype() {
+            Utf8 => {
+                let chunked_rhs = rhs.utf8().unwrap();
+                split_ca(chunked_rhs, n_threads).unwrap()
+            }
+            _ => {
+                panic!("Data type not implemented error");
+            }
+        }
     } else {
         panic!("Not Implemented Error!");
     }
@@ -352,7 +362,7 @@ impl Utf8Chunked {
         (splitted_a, splitted_b, swap, hb)
     }
 
-    fn hash_join_inner(&self, other: &Utf8Chunked, hash_table: Option<HashTableInformation>) -> (Vec<IdxSize>, Vec<IdxSize>) {
+    fn hash_join_inner(&self, other: &Utf8Chunked, hash_table: Option<&HashTableInformation>) -> (Vec<IdxSize>, Vec<IdxSize>) {
         match hash_table {
             None => {
                 let (splitted_a, splitted_b, swap, hb) = self.prepare(other, true);
