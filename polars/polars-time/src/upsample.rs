@@ -167,6 +167,7 @@ fn upsample_single_impl(
                         &[index_col_name],
                         JoinType::Left,
                         None,
+			None,
                     )
                 }
                 _ => Err(PolarsError::ComputeError(

@@ -24,9 +24,10 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "asof_join")]
 pub(crate) use single_keys::create_probe_table;
-use single_keys::*;
+pub use single_keys::*;
 #[cfg(feature = "asof_join")]
 pub(crate) use single_keys_dispatch::prepare_strs;
+pub use single_keys_dispatch::{get_splitted_chunked_array, create_hash_table_information};
 use single_keys_inner::*;
 use single_keys_left::*;
 use single_keys_outer::*;
@@ -63,6 +64,8 @@ pub type JoinOptIds = Vec<Option<IdxSize>>;
 
 #[cfg(not(feature = "chunked_ids"))]
 pub type JoinIds = Vec<IdxSize>;
+
+pub type HashTableInformation<'a> = (Vec<Vec<StrHash<'a>>>, usize, RandomState);
 
 pub type ChunkId = [IdxSize; 2];
 
@@ -333,6 +336,7 @@ impl DataFrame {
         slice: Option<(i64, usize)>,
         _check_rechunk: bool,
         _verbose: bool,
+        hash_table_information: Option<&HashTableInformation>,
     ) -> Result<DataFrame> {
         #[cfg(feature = "cross_join")]
         if let JoinType::Cross = how {
@@ -370,6 +374,7 @@ impl DataFrame {
                     slice,
                     false,
                     false,
+                    hash_table_information,
                 );
             }
         }
@@ -398,7 +403,7 @@ impl DataFrame {
             let s_right = other.column(selected_right[0].name())?;
             return match how {
                 JoinType::Inner => {
-                    self.inner_join_from_series(other, s_left, s_right, suffix, slice)
+                    self.inner_join_from_series(other, s_left, s_right, suffix, slice, hash_table_information)
                 }
                 JoinType::Left => self.left_join_from_series(other, s_left, s_right, suffix, slice),
                 JoinType::Outer => {
@@ -604,6 +609,7 @@ impl DataFrame {
         right_on: I,
         how: JoinType,
         suffix: Option<String>,
+        hash_table_information: Option<&HashTableInformation>
     ) -> Result<DataFrame>
     where
         I: IntoIterator<Item = S>,
@@ -624,6 +630,7 @@ impl DataFrame {
             None,
             true,
             false,
+            hash_table_information,
         )
     }
 
@@ -642,7 +649,7 @@ impl DataFrame {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.join(other, left_on, right_on, JoinType::Inner, None)
+        self.join(other, left_on, right_on, JoinType::Inner, None, None)
     }
 
     pub(crate) fn inner_join_from_series(
@@ -652,6 +659,7 @@ impl DataFrame {
         s_right: &Series,
         suffix: Option<String>,
         slice: Option<(i64, usize)>,
+        hash_table_information: Option<&HashTableInformation>,
     ) -> Result<DataFrame> {
         #[cfg(feature = "dtype-categorical")]
         check_categorical_src(s_left.dtype(), s_right.dtype())?;
@@ -663,10 +671,10 @@ impl DataFrame {
             }
             #[cfg(not(feature = "performant"))]
             {
-                s_left.hash_join_inner(s_right)
+                s_left.hash_join_inner(s_right, hash_table_information)
             }
         } else {
-            s_left.hash_join_inner(s_right)
+            s_left.hash_join_inner(s_right,hash_table_information)
         };
 
         let mut join_tuples_left = &*join_tuples_left;
@@ -729,7 +737,7 @@ impl DataFrame {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.join(other, left_on, right_on, JoinType::Left, None)
+        self.join(other, left_on, right_on, JoinType::Left, None, None)
     }
 
     #[cfg(not(feature = "chunked_ids"))]
@@ -897,7 +905,7 @@ impl DataFrame {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
-        self.join(other, left_on, right_on, JoinType::Outer, None)
+        self.join(other, left_on, right_on, JoinType::Outer, None, None)
     }
     pub(crate) fn outer_join_from_series(
         &self,
@@ -1164,14 +1172,14 @@ mod test {
 
         // now check the join with multiple columns
         let joined = df_a
-            .join(&df_b, ["a", "b"], ["foo", "bar"], JoinType::Left, None)
+            .join(&df_b, ["a", "b"], ["foo", "bar"], JoinType::Left, None, None)
             .unwrap();
         let ca = joined.column("ham").unwrap().utf8().unwrap();
         dbg!(&df_a, &df_b);
         assert_eq!(Vec::from(ca), correct_ham);
         let joined_inner_hack = df_a.inner_join(&df_b, ["dummy"], ["dummy"]).unwrap();
         let joined_inner = df_a
-            .join(&df_b, ["a", "b"], ["foo", "bar"], JoinType::Inner, None)
+            .join(&df_b, ["a", "b"], ["foo", "bar"], JoinType::Inner, None, None)
             .unwrap();
 
         dbg!(&joined_inner_hack, &joined_inner);
@@ -1182,7 +1190,7 @@ mod test {
 
         let joined_outer_hack = df_a.outer_join(&df_b, ["dummy"], ["dummy"]).unwrap();
         let joined_outer = df_a
-            .join(&df_b, ["a", "b"], ["foo", "bar"], JoinType::Outer, None)
+            .join(&df_b, ["a", "b"], ["foo", "bar"], JoinType::Outer, None, None)
             .unwrap();
         assert!(joined_outer_hack
             .column("ham")
@@ -1206,7 +1214,7 @@ mod test {
             .unwrap();
 
         let out = df_a
-            .join(&df_b, ["b"], ["bar"], JoinType::Left, None)
+            .join(&df_b, ["b"], ["bar"], JoinType::Left, None, None)
             .unwrap();
         assert_eq!(out.shape(), (6, 5));
         let correct_ham = &[
@@ -1224,7 +1232,7 @@ mod test {
 
         // test dispatch
         for jt in [JoinType::Left, JoinType::Inner, JoinType::Outer] {
-            let out = df_a.join(&df_b, ["b"], ["bar"], jt, None).unwrap();
+            let out = df_a.join(&df_b, ["b"], ["bar"], jt, None, None).unwrap();
             let out = out.column("b").unwrap();
             assert_eq!(out.dtype(), &DataType::Categorical(None));
         }
@@ -1239,7 +1247,7 @@ mod test {
 
         df_b.try_apply("bar", |s| s.cast(&DataType::Categorical(None)))
             .unwrap();
-        let out = df_a.join(&df_b, ["b"], ["bar"], JoinType::Left, None);
+        let out = df_a.join(&df_b, ["b"], ["bar"], JoinType::Left, None, None);
         assert!(out.is_err());
     }
 
@@ -1333,11 +1341,11 @@ mod test {
 
         // dtypes don't match, error
         assert!(df1
-            .join(&df2, vec!["a", "b"], vec!["a", "b"], JoinType::Left, None)
+            .join(&df2, vec!["a", "b"], vec!["a", "b"], JoinType::Left, None, None)
             .is_err());
         // length of join keys don't match error
         assert!(df1
-            .join(&df2, vec!["a"], vec!["a", "b"], JoinType::Left, None)
+            .join(&df2, vec!["a"], vec!["a", "b"], JoinType::Left, None, None)
             .is_err());
         Ok(())
     }
@@ -1421,6 +1429,7 @@ mod test {
                 &["join_col1", "col2"],
                 JoinType::Inner,
                 None,
+                None,
             )
             .unwrap();
 
@@ -1437,6 +1446,7 @@ mod test {
                 &["join_col1", "col2"],
                 JoinType::Left,
                 None,
+                None,
             )
             .unwrap();
 
@@ -1452,6 +1462,7 @@ mod test {
                 &["col1", "join_col2"],
                 &["join_col1", "col2"],
                 JoinType::Outer,
+                None,
                 None,
             )
             .unwrap();
@@ -1486,6 +1497,7 @@ mod test {
             vec!["foo", "bar"],
             JoinType::Left,
             None,
+            None,
         )?;
         assert_eq!(
             Vec::from(out.column("ham")?.utf8()?),
@@ -1497,6 +1509,7 @@ mod test {
             vec!["a", "c"],
             vec!["foo", "bar"],
             JoinType::Outer,
+            None,
             None,
         )?;
         assert_eq!(
@@ -1552,7 +1565,7 @@ mod test {
         right_b.rename("b");
 
         let right_df = DataFrame::new(vec![right_a.into_series(), right_b.into_series()])?;
-        let out = left_df.join(&right_df, ["a", "b"], ["a", "b"], JoinType::Inner, None)?;
+        let out = left_df.join(&right_df, ["a", "b"], ["a", "b"], JoinType::Inner, None, None)?;
         assert_eq!(out.shape(), (1, 2));
         Ok(())
     }
